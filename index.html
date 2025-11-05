@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>涨停原因分析表格生成器</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.1/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            color: #333;
+            text-align: center;
+        }
+        .upload-section {
+            background-color: #f0f8ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+        }
+        th, td {
+            padding: 8px;
+            text-align: center;
+            white-space: normal;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        .button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 15px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 14px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        .button-secondary {
+            background-color: #008CBA;
+        }
+        .button-secondary:hover {
+            background-color: #007B9A;
+        }
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+        .sector-cell {
+            color: red;
+            font-weight: bold;
+        }
+        .total-cell {
+            font-weight: bold;
+            background-color: #f0f0f0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>涨停原因分析表格生成器</h1>
+        
+        <div class="upload-section">
+            <h2>上传Excel文件</h2>
+            <input type="file" id="excelFile" accept=".xlsx, .xls" />
+            <button class="button" onclick="processFile()">上传并生成梯队</button>
+        </div>
+        
+        <table id="stockTable">
+            <thead>
+                <tr>
+                    <th>个股数量</th>
+                    <th>板块名称</th>
+                    <!-- 动态生成1天到15天的列 -->
+                </tr>
+            </thead>
+            <tbody>
+                <!-- 表格数据将在此动态填充 -->
+            </tbody>
+        </table>
+        
+        <div class="controls">
+            <button class="button" onclick="adjustFontSize('increase')">增加字号</button>
+            <button class="button" onclick="adjustFontSize('decrease')">减小字号</button>
+            <button class="button button-secondary" onclick="downloadExcel()">下载Excel</button>
+        </div>
+    </div>
+
+    <script>
+        let dataMap = {}; // 存储按板块名称和连板天数分类的数据
+        let fontSize = 12; // 默认字号
+
+        // 处理上传的Excel文件
+        function processFile() {
+            const fileInput = document.getElementById('excelFile');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert("请先选择一个Excel文件");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const data = event.target.result;
+                const workbook = XLSX.read(data, { type: 'array' });
+
+                // 假设数据在第一个工作表
+                const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                // 清空现有的表格数据
+                const tableBody = document.getElementById('stockTable').getElementsByTagName('tbody')[0];
+                tableBody.innerHTML = '';
+
+                // 初始化数据结构：按板块名称和连板天数分类
+                dataMap = {}; // 清空之前的数据
+
+                // 遍历Excel数据，将个股名称按板块和连板天数分类
+                jsonData.forEach((row, index) => {
+                    if (index === 0) return;  // 跳过表头行
+
+                    // 重新排列列的顺序
+                    // 原顺序：名称、连板、涨停原因
+                    // 新顺序：涨停原因→板块名称，连板→连板天数，名称→个股名称
+                    const stockName = row[0];   // 原名称列
+                    const boardDays = row[1];   // 原连板列
+                    const sector = row[2];      // 原涨停原因列
+
+                    if (!dataMap[sector]) {
+                        dataMap[sector] = {};
+                    }
+
+                    if (!dataMap[sector][boardDays]) {
+                        dataMap[sector][boardDays] = [];
+                    }
+
+                    dataMap[sector][boardDays].push(stockName); // 将个股按板块名称和连板天数分类
+                });
+
+                // 动态生成表格头部：1天到15天
+                const headerRow = document.querySelector('#stockTable thead tr');
+                // 清除可能已存在的列
+                while (headerRow.children.length > 2) {
+                    headerRow.removeChild(headerRow.lastChild);
+                }
+                
+                for (let day = 1; day <= 15; day++) {
+                    const th = document.createElement('th');
+                    th.innerText = `${day}天`;
+                    headerRow.appendChild(th);
+                }
+
+                // 获取板块信息并按连板天数和个股数量排序
+                const sortedSectors = Object.keys(dataMap).map(sector => {
+                    const maxDays = Math.max(...Object.keys(dataMap[sector]).map(Number)); // 获取当前板块的最大连板天数
+                    const totalStocks = Object.values(dataMap[sector]).reduce((sum, stocks) => sum + stocks.length, 0); // 计算该板块的总个股数量
+                    return { sector, maxDays, totalStocks };
+                }).sort((a, b) => {
+                    if (b.maxDays === a.maxDays) {
+                        return b.totalStocks - a.totalStocks; // 如果连板天数相同，按个股数量排序
+                    }
+                    return b.maxDays - a.maxDays; // 按连板天数排序
+                });
+
+                // 动态生成表格主体
+                sortedSectors.forEach(({ sector }) => {
+                    const tableRow = document.createElement('tr');
+                    
+                    // 统计该行所有个股的数量
+                    let totalStocks = 0;
+                    for (let day = 1; day <= 15; day++) {
+                        const stocks = dataMap[sector][day];
+                        if (stocks) {
+                            totalStocks += stocks.length;
+                        }
+                    }
+
+                    // 新增一列显示个股数量，并加粗
+                    const totalCell = document.createElement('td');
+                    totalCell.innerText = totalStocks;  // 填充个股数量
+                    totalCell.className = "total-cell";  // 应用样式
+                    tableRow.appendChild(totalCell);
+
+                    // 填充板块名称
+                    const sectorCell = document.createElement('td');
+                    sectorCell.innerText = sector;  // 填充板块名称
+                    sectorCell.className = "sector-cell";  // 应用样式
+                    tableRow.appendChild(sectorCell);
+
+                    // 为每个连板天数填充对应单元格
+                    for (let day = 1; day <= 15; day++) {
+                        const dayCell = document.createElement('td');
+                        const stocks = dataMap[sector][day];
+
+                        if (stocks) {
+                            const stockText = formatStocks(stocks);
+                            dayCell.innerHTML = stockText; // 填充处理后的个股名称，使用<br>分行
+                        } else {
+                            dayCell.innerText = ''; // 如果没有个股，单元格为空
+                        }
+
+                        tableRow.appendChild(dayCell);
+                    }
+
+                    // 将生成的行添加到表格中
+                    tableBody.appendChild(tableRow);
+                });
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+
+        // 格式化个股名称：每两个个股名称换行显示，且如果个股数大于4显示数量
+        function formatStocks(stocks) {
+            let formatted = '';
+            if (stocks.length > 4) { // 修改条件为大于4
+                formatted = stocks.length; // 如果个股数大于4，直接显示个股数量
+            } else {
+                for (let i = 0; i < stocks.length; i++) {
+                    if (i > 0 && i % 2 === 0) {
+                        formatted += '<br>'; // 每两个个股换行
+                    }
+                    formatted += stocks[i];
+                    if (i < stocks.length - 1) {
+                        formatted += ', '; // 如果不是最后一个个股，使用逗号分隔
+                    }
+                }
+            }
+            return formatted;
+        }
+
+        // 下载生成的Excel文件
+        function downloadExcel() {
+            if (Object.keys(dataMap).length === 0) {
+                alert("请先上传Excel文件并生成表格");
+                return;
+            }
+            
+            const ws = XLSX.utils.aoa_to_sheet([["个股数量", "板块名称", ...Array.from({length: 15}, (_, i) => `${i+1}天`)]]);
+            const rows = Object.keys(dataMap).map(sector => {
+                const row = [0, sector];  // 初始化行，个股数量暂设为0
+                let totalStocks = 0;
+
+                for (let day = 1; day <= 15; day++) {
+                    const stocks = dataMap[sector][day];
+                    if (stocks) {
+                        totalStocks += stocks.length;
+                        // 如果个股数大于4，显示个股数量，否则显示个股名称
+                        row.push(stocks.length > 4 ? stocks.length : stocks.join(', '));
+                    } else {
+                        row.push('');
+                    }
+                }
+
+                // 更新个股数量列
+                row[0] = totalStocks;
+
+                return row;
+            });
+
+            // 按照板块的连板天数和个股数量排序
+            rows.sort((a, b) => {
+                const maxDaysA = Math.max(...a.slice(2).map(cell => {
+                    if (typeof cell === 'number') return cell;
+                    return cell ? cell.split(',').length : 0;
+                }));
+                const maxDaysB = Math.max(...b.slice(2).map(cell => {
+                    if (typeof cell === 'number') return cell;
+                    return cell ? cell.split(',').length : 0;
+                }));
+                const totalStocksA = a[0];
+                const totalStocksB = b[0];
+
+                if (maxDaysA === maxDaysB) {
+                    return totalStocksB - totalStocksA;
+                }
+
+                return maxDaysB - maxDaysA;
+            });
+
+            // 添加数据行到工作表
+            rows.forEach(row => XLSX.utils.sheet_add_aoa(ws, [row], {origin: -1}));
+
+            // 创建一个新的Excel文件并下载
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "连板梯队");
+            XLSX.writeFile(wb, '连板梯队.xlsx');
+        }
+
+        // 调整字体大小
+        function adjustFontSize(action) {
+            const table = document.getElementById('stockTable');
+            const cells = table.getElementsByTagName('td');
+            const headers = table.getElementsByTagName('th');
+
+            if (action === 'increase') {
+                fontSize += 2;
+            } else if (action === 'decrease') {
+                fontSize = Math.max(8, fontSize - 2); // 最小字号为8px
+            }
+
+            Array.from(cells).forEach(cell => {
+                cell.style.fontSize = fontSize + 'px';
+            });
+            
+            Array.from(headers).forEach(header => {
+                header.style.fontSize = fontSize + 'px';
+            });
+        }
+    </script>
+</body>
+</html>
